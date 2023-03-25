@@ -435,7 +435,7 @@ class KeyAttrDict:
 
     def __iter__(self):
         for partition in self.__cache:
-            for name in partition.__iter__():
+            for name in partition:
                 yield name
 
     def __setitem__(self, name: str, key: Key):
@@ -475,7 +475,9 @@ class KeyAttrDict:
                 break
 
         if not maybe_key:
-            raise ValueError(f'Invalid key: {name}')
+            if debug.enabled:
+                debug(f'Invalid key: {name}')
+            return KC.NO
 
         if debug.enabled:
             debug(f'{name}: {maybe_key}')

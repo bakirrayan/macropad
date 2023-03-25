@@ -197,7 +197,7 @@ class KMKKeyboard:
             key = ksf.key
 
             # Handle any unaccounted-for layer shifts by looking up the key resolution again.
-            if ksf.int_coord in self._coordkeys_pressed.keys():
+            if ksf.int_coord is not None:
                 key = self._find_key_in_map(ksf.int_coord)
 
             # Resume the processing of the key event and update the HID report
@@ -268,8 +268,9 @@ class KMKKeyboard:
         key: Key,
         is_pressed: bool,
         int_coord: Optional[int] = None,
+        reprocess: Optional[bool] = False,
     ) -> None:
-        index = self.modules.index(module) + 1
+        index = self.modules.index(module) + (0 if reprocess else 1)
         ksf = KeyBufferFrame(
             key=key, is_pressed=is_pressed, int_coord=int_coord, index=index
         )
@@ -386,6 +387,10 @@ class KMKKeyboard:
         self._hid_helper = self._hid_helper(**self._go_args)
         self._hid_send_enabled = True
 
+    def _deinit_hid(self) -> None:
+        self._hid_helper.clear_all()
+        self._hid_helper.send()
+
     def _init_matrix(self) -> None:
         if self.matrix is None:
             if debug.enabled:
@@ -496,10 +501,29 @@ class KMKKeyboard:
                 if debug.enabled:
                     debug(f'Error in {ext}.powersave_disable: {err}')
 
+    def deinit(self) -> None:
+        for module in self.modules:
+            try:
+                module.deinit(self)
+            except Exception as err:
+                if debug.enabled:
+                    debug(f'Error in {module}.deinit: {err}')
+        for ext in self.extensions:
+            try:
+                ext.deinit(self.sandbox)
+            except Exception as err:
+                if debug.enabled:
+                    debug(f'Error in {ext}.deinit: {err}')
+
     def go(self, hid_type=HIDModes.USB, secondary_hid_type=None, **kwargs) -> None:
         self._init(hid_type=hid_type, secondary_hid_type=secondary_hid_type, **kwargs)
-        while True:
-            self._main_loop()
+        try:
+            while True:
+                self._main_loop()
+        finally:
+            debug('Unexpected error: cleaning up')
+            self._deinit_hid()
+            self.deinit()
 
     def _init(
         self,
@@ -516,18 +540,24 @@ class KMKKeyboard:
         self._init_matrix()
         self._init_coord_mapping()
 
-        for module in self.modules:
+        # Modules and extensions that fail `during_bootup` get removed from
+        # their respective lists. This serves as a self-check mechanism; any
+        # modules or extensions that initialize peripherals or data structures
+        # should do that in `during_bootup`.
+        for idx, module in enumerate(self.modules):
             try:
                 module.during_bootup(self)
             except Exception as err:
                 if debug.enabled:
                     debug(f'Failed to load module {module}: {err}')
-        for ext in self.extensions:
+                del self.modules[idx]
+        for idx, ext in enumerate(self.extensions):
             try:
                 ext.during_bootup(self)
             except Exception as err:
                 if debug.enabled:
                     debug(f'Failed to load extensions {module}: {err}')
+                del self.extensions[idx]
 
         if debug.enabled:
             debug(f'init: {self}')
